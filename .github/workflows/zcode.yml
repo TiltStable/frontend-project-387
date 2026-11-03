@@ -60,35 +60,37 @@ jobs:
         run: ln -s AGENTS.md CLAUDE.md
 
       # Предел запусков на PR: проверяется ДО вызова модели. Попыткой
-      # считается каждый допущенный запрос человека (общий и построчный
-      # комментарии), включая повторные прогоны (run_attempt). Счётчик —
-      # история Actions (actions: read), которую токен агента не перепишет.
+      # считается каждый допущенный запрос человека — комментарий с /zc
+      # (общий или к строке diff) от не-бота; счётчик ведётся по этим
+      # комментариям (issues API + pulls comments API). Повторные прогоны
+      # Re-run не добавляют комментариев и попытку не расходуют; отказ
+      # limit_exhausted тоже является попыткой. Бюджет действует на весь
+      # срок жизни PR: добавление ключа модели тот же PR не разблокирует,
+      # новый PR получает новый бюджет. Runs API здесь не используется:
+      # для issue_comment-прогонов поле pull_requests пусто, head_branch
+      # всегда main — корреляции с PR нет (проверено на живых данных).
       - name: Budget check
         id: budget
         env:
           GH_TOKEN: ${{ github.token }}
           NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
-          RUN_ID: ${{ github.run_id }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/agent
           LIMIT=3
-          PRIOR=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?workflow=zcode.yml&per_page=100" \
-            --jq "[.workflow_runs[]
-                   | select(.id != ${RUN_ID}
-                       and (.event == \"issue_comment\" or .event == \"pull_request_review_comment\")
-                       and .conclusion != \"skipped\"
-                       and ([.pull_requests[].number] | index(${NUMBER})))]
-                  | map(.run_attempt)
-                  | add // 0")
-          echo "prior attempts on #$NUMBER: $PRIOR"
+          GENERAL=$(gh api "repos/$GITHUB_REPOSITORY/issues/$NUMBER/comments" \
+            --jq '[.[] | select(.user.type != "Bot" and contains(.body, "/zc"))] | length')
+          INLINE=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/comments" \
+            --jq '[.[] | select(.user.type != "Bot" and contains(.body, "/zc"))] | length' \
+            2>/dev/null || echo 0)
+          PRIOR=$((GENERAL + INLINE))
+          echo "prior /zc attempts on #$NUMBER: general=$GENERAL inline=$INLINE"
           if [ "$PRIOR" -ge "$LIMIT" ]; then
             SHA=$(gh pr view "$NUMBER" --json headRefOid -q .headRefOid 2>/dev/null || echo "unknown")
             {
               echo "**Предел запусков исчерпан (\`limit_exhausted\`). Нужен человек.**"
               echo
-              echo "Бюджет: $LIMIT попыток на PR, использовано: $PRIOR. Команда выполнена без вызова модели."
+              echo "Бюджет: $LIMIT попыток на PR, получено команд: $PRIOR. Команда выполнена без вызова модели."
               echo
               echo "Последний head SHA PR: \`$SHA\`"
               echo "Логи прогона: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

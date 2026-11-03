@@ -53,7 +53,9 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run e2e scenarios with trace
-        run: npm run e2e -- --trace on
+        # Прямой вызов workspace-скрипта: через корневой `npm run e2e`
+        # флаг --trace теряется на двойном npm-хопе (e2e -> npm run test).
+        run: npm run test -w e2e -- --trace on
 
       - uses: actions/upload-artifact@v5
         if: ${{ always() }}
