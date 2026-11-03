@@ -139,4 +139,80 @@ describe("BookPage", () => {
 
     expect(await screen.findByText("Это время уже занято. Выберите другой слот.")).toBeTruthy();
   });
+
+  it("sends an optional topic with the booking and shows it in the confirmation", async () => {
+    mockedEventTypesList.mockResolvedValue({ data: [introCall] } as never);
+    mockedAvailableSlotsApiList.mockResolvedValue({
+      data: {
+        eventTypeId: "intro-call",
+        durationMinutes: 15,
+        windowFrom: "2026-10-31",
+        windowTo: "2026-11-13",
+        slots: ["2026-11-02T09:00:00+03:00"],
+      },
+    } as never);
+    mockedBookingsCreate.mockResolvedValue({
+      data: {
+        id: "b1",
+        eventTypeId: "intro-call",
+        eventTypeTitle: "Знакомство",
+        topic: "Обсудить проект",
+        start: "2026-11-02T09:00:00+03:00",
+        end: "2026-11-02T09:15:00+03:00",
+      },
+    } as never);
+
+    renderWithProviders(<BookPage />);
+    fireEvent.click(await screen.findByText("Знакомство"));
+
+    const topicInput = await screen.findByPlaceholderText("Тема звонка (необязательно)");
+    fireEvent.change(topicInput, { target: { value: "Обсудить проект" } });
+    fireEvent.click(screen.getByText("09:00"));
+
+    expect(await screen.findByText(/Тема: «Обсудить проект»/)).toBeTruthy();
+    expect(mockedBookingsCreate).toHaveBeenCalledWith({
+      body: {
+        eventTypeId: "intro-call",
+        start: "2026-11-02T09:00:00+03:00",
+        topic: "Обсудить проект",
+      },
+    });
+  });
+
+  it("sends an empty topic when the field is left empty", async () => {
+    mockedEventTypesList.mockResolvedValue({ data: [introCall] } as never);
+    mockedAvailableSlotsApiList.mockResolvedValue({
+      data: {
+        eventTypeId: "intro-call",
+        durationMinutes: 15,
+        windowFrom: "2026-10-31",
+        windowTo: "2026-11-13",
+        slots: ["2026-11-02T09:00:00+03:00"],
+      },
+    } as never);
+    mockedBookingsCreate.mockResolvedValue({
+      data: {
+        id: "b1",
+        eventTypeId: "intro-call",
+        eventTypeTitle: "Знакомство",
+        topic: "",
+        start: "2026-11-02T09:00:00+03:00",
+        end: "2026-11-02T09:15:00+03:00",
+      },
+    } as never);
+
+    renderWithProviders(<BookPage />);
+    fireEvent.click(await screen.findByText("Знакомство"));
+    fireEvent.click(await screen.findByText("09:00"));
+
+    expect(await screen.findByText(/Вы записаны: Знакомство/)).toBeTruthy();
+    expect(screen.queryByText(/Тема:/)).toBeNull();
+    expect(mockedBookingsCreate).toHaveBeenCalledWith({
+      body: {
+        eventTypeId: "intro-call",
+        start: "2026-11-02T09:00:00+03:00",
+        topic: "",
+      },
+    });
+  });
 });

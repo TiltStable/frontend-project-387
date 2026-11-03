@@ -42,6 +42,7 @@ export default function MeetingsPage() {
             {meetings.map((meeting) => (
               <Text key={meeting.id}>
                 {meeting.eventTypeTitle} — {startFormatter.format(new Date(meeting.start))}
+                {meeting.topic ? ` · Тема: «${meeting.topic}»` : ""}
               </Text>
             ))}
           </Stack>

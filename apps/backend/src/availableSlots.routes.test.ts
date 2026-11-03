@@ -5,7 +5,13 @@ import { createInMemoryBookingStore, createInMemoryEventTypeStore } from "./stor
 const NOW = Date.parse("2026-10-30T12:00:00+03:00");
 
 function makeApp(
-  bookings: { id: string; eventTypeId: string; startMs: number; endMs: number }[] = [],
+  bookings: {
+    id: string;
+    eventTypeId: string;
+    topic?: string;
+    startMs: number;
+    endMs: number;
+  }[] = [],
 ) {
   const eventTypes = createInMemoryEventTypeStore();
   eventTypes.create({
@@ -16,7 +22,7 @@ function makeApp(
   });
   const bookingStore = createInMemoryBookingStore();
   for (const booking of bookings) {
-    bookingStore.create(booking);
+    bookingStore.create({ topic: "", ...booking });
   }
 
   return createApp({ eventTypes, bookings: bookingStore, now: () => NOW });
