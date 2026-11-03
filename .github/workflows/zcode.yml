@@ -79,12 +79,12 @@ jobs:
           mkdir -p /tmp/agent
           LIMIT=3
           GENERAL=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$NUMBER/comments" \
-            --jq '[.[] | select(.user.type != "Bot" and contains(.body, "/zc"))] | length' \
+            --jq '[.[] | select(.user.type != "Bot" and (.body | contains("/zc")))] | length' \
             | awk '{s+=$1} END{print s+0}')
           # Построчные комментарии живут в pulls comments API; для plain
           # issue эндпоинт даёт 404 — считаем нулем.
           INLINE=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/comments" \
-            --jq '[.[] | select(.user.type != "Bot" and contains(.body, "/zc"))] | length' \
+            --jq '[.[] | select(.user.type != "Bot" and (.body | contains("/zc")))] | length' \
             2>/dev/null | awk '{s+=$1} END{print s+0}' || echo 0)
           PRIOR=$((GENERAL + INLINE))
           echo "prior /zc attempts on #$NUMBER: general=$GENERAL inline=$INLINE"
