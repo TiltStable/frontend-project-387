@@ -96,6 +96,7 @@ git clone https://github.com/TiltStable/frontend-project-387.git
 cd frontend-project-387
 mise install   # ставит node, hk, pitchfork по mise.toml
 npm install
+hk install     # git-хуки: pre-commit (lint + format), commit-msg (Conventional Commits)
 ```
 
 ## Использование
@@ -148,7 +149,11 @@ docker run --rm -p 4000:4000 -e PORT=4000 call-calendar
 
 Деплой — [Render](https://render.com), Blueprint в `render.yaml`: web-сервис
 собирается из Dockerfile ветки `main` и автодеплоится на каждый коммит.
-Free-инстанс засыпает после 15 минут простоя (см. «Демо» выше).
+Демо-адрес выше обслуживается инстансом, подключённым к исходному репозиторию
+[frontend-project-386](https://github.com/TiltStable/frontend-project-386);
+к этому репозиторию Render-сервис пока не подключён, поэтому Blueprint из
+`render.yaml` создаст отдельный сервис со своим URL. Free-инстанс засыпает
+после 15 минут простоя (см. «Демо» выше).
 
 ### MCP-сервер Render
 

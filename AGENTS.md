@@ -71,4 +71,5 @@
   командами);
 - security: secret_scanner перед каждым пушем;
 - деплой: сервис на Render (см. README «Docker и деплой»), автоматизация
-  через Render API/MCP (`${RENDER_API_KEY}` из окружения).
+  через Render API/MCP (нужен `RENDER_API_KEY` в окружении или OAuth;
+  настройка описана в README «MCP-сервер Render»).
