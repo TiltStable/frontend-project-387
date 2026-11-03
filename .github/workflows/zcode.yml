@@ -78,11 +78,14 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/agent
           LIMIT=3
-          GENERAL=$(gh api "repos/$GITHUB_REPOSITORY/issues/$NUMBER/comments" \
-            --jq '[.[] | select(.user.type != "Bot" and contains(.body, "/zc"))] | length')
-          INLINE=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/comments" \
+          GENERAL=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$NUMBER/comments" \
             --jq '[.[] | select(.user.type != "Bot" and contains(.body, "/zc"))] | length' \
-            2>/dev/null || echo 0)
+            | awk '{s+=$1} END{print s+0}')
+          # Построчные комментарии живут в pulls comments API; для plain
+          # issue эндпоинт даёт 404 — считаем нулем.
+          INLINE=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/comments" \
+            --jq '[.[] | select(.user.type != "Bot" and contains(.body, "/zc"))] | length' \
+            2>/dev/null | awk '{s+=$1} END{print s+0}' || echo 0)
           PRIOR=$((GENERAL + INLINE))
           echo "prior /zc attempts on #$NUMBER: general=$GENERAL inline=$INLINE"
           if [ "$PRIOR" -ge "$LIMIT" ]; then
@@ -96,6 +99,9 @@ jobs:
               echo "Логи прогона: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             } > /tmp/agent/answer.txt
             echo "0" > /tmp/agent/exit-code
+            # Маркер для Post reply: заголовок «агент не запускался» вместо
+            # дефолтного «Ответ агента».
+            echo "limit_exhausted" > /tmp/agent/limit-exhausted
             echo "exceeded=true" >> "$GITHUB_OUTPUT"
             echo "Бюджет исчерпан — запуск агента пропущен."
           else
@@ -180,17 +186,20 @@ jobs:
             const answer = read("/tmp/agent/answer.txt").trim();
             const ran = fs.existsSync("/tmp/agent/exit-code");
             const rc = read("/tmp/agent/exit-code").trim() || "1";
+            const limitExhausted = fs.existsSync("/tmp/agent/limit-exhausted");
             const MAX_BYTES = 60000; // лимит комментария GitHub 65536 байт; кириллица — 2 байта/символ
             const buf = Buffer.from(answer, "utf8");
             const trimmed = buf.length > MAX_BYTES
               ? buf.subarray(0, MAX_BYTES).toString("utf8")
                 + "\n\n…(ответ обрезан, полные логи — в прогоне Actions)"
               : answer;
-            const header = !ran
-              ? "**Агент не запускался: сбой при подготовке прогона (подробности — в логах шага Build prompt):**"
-              : rc === "0"
-                ? "**Ответ агента:**"
-                : "**Агент завершился с ошибкой; ниже всё, что он успел вывести:**";
+            const header = limitExhausted
+              ? "**Агент не запускался: предел запусков на этот PR исчерпан:**"
+              : !ran
+                ? "**Агент не запускался: сбой при подготовке прогона (подробности — в логах прогона):**"
+                : rc === "0"
+                  ? "**Ответ агента:**"
+                  : "**Агент завершился с ошибкой; ниже всё, что он успел вывести:**";
             const fallback = "(пустой вывод — детали в логах прогона)";
             const body = `${header}\n\n${trimmed || fallback}\n\n---\nПрогон: ${process.env.RUN_URL}`;
             fs.writeFileSync("/tmp/agent/comment.md", body);

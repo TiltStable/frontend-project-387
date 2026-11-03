@@ -27,15 +27,26 @@ async function openBookingPage(page: Page) {
 test("guest books a slot and the owner sees the meeting", async ({ page, request }) => {
   await openBookingPage(page);
 
-  await page.locator("[data-slot]").first().click();
+  const slot = page.locator("[data-slot]").first();
+  const slotIso = await slot.getAttribute("data-slot");
+  await slot.click();
   await expect(page.getByText(/Вы записаны: Знакомство \(e2e\)/)).toBeVisible();
 
   const meetings = await request.get(`${API}/api/meetings`);
-  const body = (await meetings.json()) as { eventTypeTitle: string; topic: string }[];
-  // Соседний сценарий: бронирование без темы — тема пустая, поведение прежнее.
-  const withoutTopic = body.filter((meeting) => meeting.eventTypeTitle === EVENT_TYPE_TITLE);
-  expect(withoutTopic.length).toBeGreaterThan(0);
-  for (const meeting of withoutTopic) {
+  const body = (await meetings.json()) as {
+    eventTypeTitle: string;
+    topic: string;
+    start: string;
+  }[];
+  // Соседний сценарий: бронирование без темы — тема пустая, поведение
+  // прежнее. Скоуп — слот этого прогона: занятые слоты исключаются из
+  // выдачи, поэтому бронирования слота принадлежат только no-topic
+  // тестам и не зависят от переиспользования сервера между прогонами.
+  const created = body.filter(
+    (meeting) => meeting.eventTypeTitle === EVENT_TYPE_TITLE && meeting.start === slotIso,
+  );
+  expect(created.length).toBeGreaterThan(0);
+  for (const meeting of created) {
     expect(meeting.topic).toBe("");
   }
 

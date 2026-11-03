@@ -69,7 +69,8 @@ describe("POST /api/bookings", () => {
   });
 
   it("stores and returns a call topic with the booking", async () => {
-    const res = await post(makeApp(), {
+    const app = makeApp();
+    const res = await post(app, {
       eventTypeId: "intro-call",
       start: "2026-11-02T09:00:00+03:00",
       topic: "Обсудить проект",
@@ -79,8 +80,9 @@ describe("POST /api/bookings", () => {
     const body = (await res.json()) as Record<string, string>;
     expect(body.topic).toBe("Обсудить проект");
 
-    const meetings = await makeApp().request("/api/meetings");
-    expect(meetings.status).toBe(200);
+    const meetings = await app.request("/api/meetings");
+    const meetingBody = (await meetings.json()) as { topic: string }[];
+    expect(meetingBody.some((meeting) => meeting.topic === "Обсудить проект")).toBe(true);
   });
 
   it("keeps bookings without a topic working (topic is empty, neighbor scenario)", async () => {
