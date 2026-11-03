@@ -1,0 +1,215 @@
+# Ежедневный аудит приложения: Lighthouse-отчёт по прод-адресу сохраняется
+# артефактом, агент разбирает его и создаёт issue только по новой находке
+# (сначала ищет дубли среди открытых issues). Без находок агент публикует
+# вывод в журнальном issue. Отчёты живут вне рабочего дерева (/tmp/audit)
+# и в git не попадают. Запуск вручную — кнопка Run workflow.
+#
+# Адрес приложения и журнальный issue задаются переменными репозитория
+# APP_URL и AUDIT_LOG_ISSUE (Settings → Variables → Actions).
+
+name: audit
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+      timezone: Europe/Moscow
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: audit
+  cancel-in-progress: false
+
+env:
+  APP_URL: ${{ vars.APP_URL }}
+  AUDIT_LOG_ISSUE: ${{ vars.AUDIT_LOG_ISSUE }}
+  CLAUDE_CODE_VERSION: "2.1.317"
+  ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify APP_URL is configured
+        run: |
+          if [ -z "$APP_URL" ]; then
+            echo "::error::Переменная APP_URL не задана (Settings → Variables → Actions)."
+            exit 1
+          fi
+          echo "Аудит приложения: $APP_URL"
+
+      # Free-инстанс Render спит после 15 минут; прогрев до измерений.
+      - name: Warm up the app
+        run: |
+          for attempt in 1 2; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 150 "$APP_URL/health" || echo 000)
+            echo "warm-up attempt $attempt: HTTP $code"
+            if [ "$code" = "200" ]; then break; fi
+          done
+          if [ "$code" != "200" ]; then
+            echo "::error::Приложение не ответило 200 на /health за два прогрева (последний: HTTP $code)."
+            exit 1
+          fi
+
+      - name: Collect Lighthouse report
+        run: |
+          mkdir -p /tmp/audit
+          npx --yes lighthouse@12 "$APP_URL" \
+            --output json \
+            --output-path /tmp/audit/lighthouse-report.json \
+            --only-categories=performance,accessibility,best-practices,seo \
+            --chrome-flags="--headless=new" \
+            --quiet
+
+      - name: Summarize report for the agent
+        run: |
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const report = JSON.parse(fs.readFileSync("/tmp/audit/lighthouse-report.json", "utf8"));
+            const categories = report.categories ?? {};
+            const audits = report.audits ?? {};
+            const metrics = ["first-contentful-paint", "largest-contentful-paint", "total-blocking-time", "cumulative-layout-shift", "speed-index"];
+            const lines = [];
+            lines.push("# Сводка Lighthouse-аудита");
+            lines.push(`Адрес: ${report.finalDisplayedUrl ?? "unknown"}`);
+            lines.push("");
+            lines.push("## Оценки категорий");
+            for (const [key, category] of Object.entries(categories)) {
+              lines.push(`- ${category.title}: ${Math.round((category.score ?? 0) * 100)}`);
+            }
+            lines.push("");
+            lines.push("## Метрики");
+            for (const key of metrics) {
+              const audit = audits[key];
+              if (audit) lines.push(`- ${audit.title}: ${audit.displayValue ?? "n/a"} (score ${audit.score ?? "n/a"})`);
+            }
+            lines.push("");
+            lines.push("## Аудиты с оценкой ниже 0.9");
+            for (const audit of Object.values(audits)) {
+              if (audit.score !== null && audit.score < 0.9 && (audit.scoreDisplayValue ?? "") !== "") {
+                lines.push(`- ${audit.title} (${audit.scoreDisplayValue}): ${String(audit.description ?? "").slice(0, 160)}`);
+              }
+              if (audit.score === null && audit.scoreDisplayMode === "informative") continue;
+            }
+            fs.writeFileSync("/tmp/audit/audit-summary.md", lines.join("\n"));
+          '
+          wc -c /tmp/audit/audit-summary.md
+
+      - uses: actions/upload-artifact@v5
+        if: ${{ always() }}
+        with:
+          name: audit-data
+          path: |
+            /tmp/audit/lighthouse-report.json
+            /tmp/audit/audit-summary.md
+          retention-days: 14
+
+      - name: Expose project rules to the agent
+        run: ln -s AGENTS.md CLAUDE.md
+
+      # Инструкция агенту живёт в prompt: у запуска по расписанию нет
+      # пользовательского комментария.
+      - name: Build audit prompt
+        env:
+          NUMBER: ${{ vars.AUDIT_LOG_ISSUE }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Ты — агент учебного проекта «Календарь звонков» (репозиторий $GITHUB_REPOSITORY)."
+            echo "Это РЕГУЛЯРНЫЙ АУДИТ работающего приложения по Lighthouse-отчёту."
+            echo "Правила проекта — AGENTS.md; критерии качества интерфейса — REVIEW.md;"
+            echo "конвенции трекера — docs/agents/tracker.md."
+            echo
+            echo "Что сделать:"
+            echo "1. Прочитай /tmp/audit/audit-summary.md — сжатый Lighthouse-отчёт."
+            echo "2. Оцени находки по критериям REVIEW.md; релевантны проблемы, которые"
+            echo "   можно исправить в этом приложении (не инфраструктурные капризы Render)."
+            echo "3. Найди дубли: gh issue list --label audit --state open и поиск по тексту"
+            echo "   находки среди открытых issues. Если та же проблема уже зарегистрирована"
+            echo "   и новых сведений нет — новую задачу НЕ создавай."
+            echo "4. Новая находка → создай issue: заголовок с сутью, тело — проблема,"
+            echo "   предлагаемое действие, ссылка на артефакт отчёта и прогон, пометка"
+            echo "   какое приложение проверялось. Метка: audit. Комментарий к тексту не нужен."
+            echo "5. Дубль или находок нет → добавь комментарий в журнальный issue #$NUMBER:"
+            echo "   дата, находок нет / повтор находки <ссылка на существующий issue>,"
+            echo "   ссылка на прогон."
+            echo
+            echo "Правила: код не менять, PR не создавать, дубли не плодить, отвечать по-русски."
+            echo
+            echo "## Прогон"
+            echo $RUN_URL
+            echo
+            echo "## Отчёт"
+            cat /tmp/audit/audit-summary.md
+          } > /tmp/agent/prompt.md
+          wc -c /tmp/agent/prompt.md
+
+      - name: Run agent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.Z_AI_API_KEY }}
+          API_TIMEOUT_MS: "3000000"
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+        run: |
+          set -uo pipefail
+          rc=0
+          claude -p "$(cat /tmp/agent/prompt.md)" \
+            --output-format text \
+            --allowedTools "Bash(gh issue list:*)" "Bash(gh issue view:*)" "Bash(gh issue create:*)" "Bash(gh issue comment:*)" "Bash(gh search issues:*)" "Read" "Grep" "Glob" \
+            > /tmp/agent/answer.txt 2> /tmp/agent/agent.err || rc=$?
+          echo "$rc" > /tmp/agent/exit-code
+          echo "agent exit code: $rc"
+          tail -5 /tmp/agent/agent.err || true
+          exit 0
+
+      - name: Post audit outcome
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const read = (p) => { try { return fs.readFileSync(p, "utf8"); } catch { return ""; } };
+            const answer = read("/tmp/agent/answer.txt").trim();
+            const ran = fs.existsSync("/tmp/agent/exit-code");
+            const rc = read("/tmp/agent/exit-code").trim() || "1";
+            const MAX_BYTES = 60000;
+            const buf = Buffer.from(answer, "utf8");
+            const trimmed = buf.length > MAX_BYTES
+              ? buf.subarray(0, MAX_BYTES).toString("utf8")
+                + "\n\n…(ответ обрезан, полные логи — в прогоне Actions)"
+              : answer;
+            const header = !ran
+              ? "**Аудит-агент не запускался: сбой при подготовке прогона (infra):**"
+              : rc === "0"
+                ? "**Вывод аудит-агента:**"
+                : "**Аудит-агент завершился с ошибкой (agent_failed); ниже всё, что он успел вывести:**";
+            const fallback = "(пустой вывод — детали в логах прогона)";
+            fs.writeFileSync("/tmp/agent/comment.md",
+              `${header}\n\n${trimmed || fallback}\n\n---\nПрогон: ${process.env.RUN_URL}`);
+          '
+          if [ -n "$AUDIT_LOG_ISSUE" ]; then
+            gh issue comment "$AUDIT_LOG_ISSUE" --repo "$GITHUB_REPOSITORY" \
+              --body-file /tmp/agent/comment.md
+          else
+            echo "AUDIT_LOG_ISSUE не задана — вывод только в логах и артефакте."
+            tail -5 /tmp/agent/comment.md
+          fi
+
+      - name: Fail visibly on agent error
+        run: |
+          RC=$(cat /tmp/agent/exit-code)
+          test "$RC" = "0"

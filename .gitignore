@@ -10,3 +10,6 @@ coverage/
 playwright-report/
 test-results/
 MEMORY.md
+
+# Локальные отчёты аудита (в git не попадают)
+audit-reports/
