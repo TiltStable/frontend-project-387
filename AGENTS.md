@@ -37,6 +37,14 @@
 - `npm run contract:build` — TypeSpec → OpenAPI
 - `npm run client:generate` — OpenAPI → TypeScript SDK
 
+## Агент в GitHub
+
+Комментарий `/zc <запрос>` (или `/zcode`) в issue, PR или к строке diff
+запускает агента на раннере GitHub Actions (`.github/workflows/zcode.yml`).
+Ответ приходит комментарием в то же обсуждение. Модель — GLM через
+Anthropic-совместимый API Z.AI, ключ — в секрете `Z_AI_API_KEY`. Правила
+проекта агент читает из этого файла и из `docs/agents/` в рабочей копии.
+
 ## Правила
 
 - Коммиты строго по Conventional Commits (`feat:`, `fix:`, ...); commit-msg

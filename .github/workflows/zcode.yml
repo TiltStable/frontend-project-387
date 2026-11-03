@@ -1,0 +1,158 @@
+# Интерактивный агент проекта: комментарий `/zc <запрос>` (или `/zcode`) в
+# issue, PR или к строке diff запускает агента на раннере GitHub Actions.
+# Ответ публикуется комментарием от github-actions[bot] в то же обсуждение.
+#
+# Отличие от эталонной схемы OpenCode (см. README «Агент в GitHub»): у ZCode
+# нет GitHub App и документированного headless-режима, поэтому авторизация —
+# не OIDC-обмен id-token, а явные права GITHUB_TOKEN; агенту токен не
+# выдаётся, ответ публикует сам воркфлоу.
+
+name: zcode
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: zcode-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+env:
+  CLAUDE_CODE_VERSION: "2.1.317"
+  ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
+
+jobs:
+  agent:
+    if: >-
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR') &&
+      github.event.comment.user.type != 'Bot' &&
+      contains(github.event.comment.body, '/zc')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install agent CLI
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+      # Агент читает правила проекта; CLAUDE.md — имя, которое CLI находит
+      # автоматически, AGENTS.md остаётся каноничным файлом в репозитории.
+      - name: Expose project rules to the agent
+        run: ln -s AGENTS.md CLAUDE.md
+
+      - name: Build prompt from issue and comment
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_PATH: ${{ github.event.comment.path }}
+          COMMENT_LINE: ${{ github.event.comment.line }}
+          DIFF_HUNK: ${{ github.event.comment.diff_hunk }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/agent
+          # Убираем команду вызова из текста, оставляя сам запрос.
+          TASK=$(printf '%s' "$COMMENT_BODY" \
+            | sed -E 's@(^|[[:space:]])/(zcode|zc)([[:space:]]|$)@\1@g' \
+            | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+          {
+            echo "Ты — агент учебного проекта «Календарь звонков» (репозиторий $GITHUB_REPOSITORY)."
+            echo "Ты работаешь в рабочей копии репозитория. Правила проекта — в AGENTS.md,"
+            echo "конвенции тикетов — docs/agents/tracker.md, процедура реализации —"
+            echo "docs/agents/implement-spec.md: загляни в них, если запрос к ним относится."
+            echo "Отвечай по-русски, в Markdown, кратко и по делу."
+            echo
+            if [ "$EVENT_NAME" = "pull_request_review_comment" ]; then
+              echo "## Контекст: комментарий к строке diff"
+              echo "Файл: \`${COMMENT_PATH}\`, строка: ${COMMENT_LINE}"
+              echo
+              echo '```diff'
+              printf '%s\n' "$DIFF_HUNK" | head -40
+              echo '```'
+              echo
+              echo "## Pull request #$NUMBER: $(gh pr view "$NUMBER" --json title -q .title)"
+            else
+              echo "## Контекст: issue/PR #$NUMBER"
+              gh issue view "$NUMBER" --json title,body \
+                -q '"### " + .title + "\n\n" + ((.body // "")[0:8000])'
+            fi
+            echo
+            echo "## Запрос пользователя"
+            echo "$TASK"
+          } > /tmp/agent/prompt.md
+          wc -c /tmp/agent/prompt.md
+
+      - name: Run agent
+        env:
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.Z_AI_API_KEY }}
+          API_TIMEOUT_MS: "3000000"
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+        run: |
+          set -uo pipefail
+          rc=0
+          claude -p "$(cat /tmp/agent/prompt.md)" \
+            --output-format text \
+            > /tmp/agent/answer.txt 2> /tmp/agent/agent.err || rc=$?
+          echo "$rc" > /tmp/agent/exit-code
+          echo "agent exit code: $rc"
+          tail -5 /tmp/agent/agent.err || true
+          # Падение агента обрабатывает следующий шаг (публикация + красный
+          # прогон); здесь важно не проглотить stdout при ненулевом exit.
+          exit 0
+
+      - name: Post reply
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const read = (p) => { try { return fs.readFileSync(p, "utf8"); } catch { return ""; } };
+            const answer = read("/tmp/agent/answer.txt").trim();
+            const rc = read("/tmp/agent/exit-code").trim() || "1";
+            const limit = 60000; // символы, не байты: лимит комментария GitHub 65536
+            const trimmed = answer.length > limit
+              ? answer.slice(0, limit) + "\n\n…(ответ обрезан, полные логи — в прогоне Actions)"
+              : answer;
+            const header = rc === "0"
+              ? "**Ответ агента:**"
+              : "**Агент завершился с ошибкой; ниже всё, что он успел вывести:**";
+            const fallback = "(пустой вывод — детали в логах прогона)";
+            const body = `${header}\n\n${trimmed || fallback}\n\n---\nПрогон: ${process.env.RUN_URL}`;
+            fs.writeFileSync("/tmp/agent/comment.md", body);
+          '
+          if [ "$EVENT_NAME" = "pull_request_review_comment" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/pulls/comments/$COMMENT_ID/replies" \
+              -f body=@/tmp/agent/comment.md
+          else
+            gh issue comment "$NUMBER" --body-file /tmp/agent/comment.md
+          fi
+
+      - name: Fail visibly on agent error
+        run: |
+          RC=$(cat /tmp/agent/exit-code)
+          test "$RC" = "0"
