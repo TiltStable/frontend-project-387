@@ -27,6 +27,8 @@ export function createInMemoryEventTypeStore(): EventTypeStore {
 export interface BookingRecord {
   id: string;
   eventTypeId: string;
+  /** Empty string when the guest did not provide a topic. */
+  topic: string;
   startMs: number;
   endMs: number;
 }

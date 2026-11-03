@@ -22,14 +22,14 @@ const DEEP_DIVE: EventTypeRecord = {
 
 function makeApp(
   nowMs: number,
-  bookings: { eventTypeId: string; startMs: number; endMs: number }[],
+  bookings: { eventTypeId: string; topic?: string; startMs: number; endMs: number }[],
 ) {
   const eventTypes = createInMemoryEventTypeStore();
   eventTypes.create(INTRO_CALL);
   eventTypes.create(DEEP_DIVE);
   const bookingStore = createInMemoryBookingStore();
   for (const booking of bookings) {
-    bookingStore.create({ id: `b-${booking.startMs}`, ...booking });
+    bookingStore.create({ id: `b-${booking.startMs}`, topic: "", ...booking });
   }
 
   return createApp({ eventTypes, bookings: bookingStore, now: () => nowMs });

@@ -68,6 +68,85 @@ describe("POST /api/bookings", () => {
     expect(body.id).toBeTruthy();
   });
 
+  it("stores and returns a call topic with the booking", async () => {
+    const app = makeApp();
+    const res = await post(app, {
+      eventTypeId: "intro-call",
+      start: "2026-11-02T09:00:00+03:00",
+      topic: "Обсудить проект",
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as Record<string, string>;
+    expect(body.topic).toBe("Обсудить проект");
+
+    const meetings = await app.request("/api/meetings");
+    const meetingBody = (await meetings.json()) as { topic: string }[];
+    expect(meetingBody.some((meeting) => meeting.topic === "Обсудить проект")).toBe(true);
+  });
+
+  it("keeps bookings without a topic working (topic is empty, neighbor scenario)", async () => {
+    const app = makeApp();
+    const withoutField = await post(app, {
+      eventTypeId: "intro-call",
+      start: "2026-11-02T09:00:00+03:00",
+    });
+    expect(withoutField.status).toBe(201);
+    const body = (await withoutField.json()) as Record<string, string>;
+    expect(body.topic).toBe("");
+
+    const withEmpty = await post(app, {
+      eventTypeId: "intro-call",
+      start: "2026-11-02T09:15:00+03:00",
+      topic: "",
+    });
+    expect(withEmpty.status).toBe(201);
+    expect(((await withEmpty.json()) as Record<string, string>).topic).toBe("");
+
+    const meetings = (await (await app.request("/api/meetings")).json()) as {
+      topic: string;
+    }[];
+    expect(meetings.map((meeting) => meeting.topic)).toEqual(["", ""]);
+  });
+
+  it("rejects a topic longer than 200 characters with TOPIC_TOO_LONG", async () => {
+    const res = await post(makeApp(), {
+      eventTypeId: "intro-call",
+      start: "2026-11-02T09:00:00+03:00",
+      topic: "т".repeat(201),
+    });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string; message: string };
+    expect(body.code).toBe("TOPIC_TOO_LONG");
+  });
+
+  it("treats a whitespace-only topic as no topic (regression)", async () => {
+    const res = await post(makeApp(), {
+      eventTypeId: "intro-call",
+      start: "2026-11-02T09:00:00+03:00",
+      topic: "   ",
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as Record<string, string>;
+    expect(body.topic).toBe("");
+  });
+
+  it("rejects a conflicting slot even when a topic is present", async () => {
+    const app = makeApp();
+    await post(app, { eventTypeId: "intro-call", start: "2026-11-02T09:00:00+03:00" });
+
+    const res = await post(app, {
+      eventTypeId: "intro-call",
+      start: "2026-11-02T09:00:00+03:00",
+      topic: "Дубль",
+    });
+
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { code: string }).code).toBe("SLOT_TAKEN");
+  });
+
   it("rejects a booking that partially overlaps an existing one of another type (60-min at 10:00, then 30-min at 10:30)", async () => {
     const app = makeApp();
     const first = await post(app, {

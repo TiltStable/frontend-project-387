@@ -16,6 +16,10 @@ export type Booking = {
     id: string;
     eventTypeId: string;
     eventTypeTitle: string;
+    /**
+     * Optional call topic provided by the guest; empty string when absent.
+     */
+    topic: string;
     start: string;
     end: string;
 };
@@ -23,6 +27,10 @@ export type Booking = {
 export type BookingCreate = {
     eventTypeId: string;
     start: string;
+    /**
+     * Optional call topic; empty or missing means no topic.
+     */
+    topic?: string;
 };
 
 export type ConflictError = {
@@ -52,6 +60,10 @@ export type Meeting = {
     id: string;
     eventTypeId: string;
     eventTypeTitle: string;
+    /**
+     * Same as the booking's topic; empty string when absent.
+     */
+    topic: string;
     start: string;
     end: string;
 };

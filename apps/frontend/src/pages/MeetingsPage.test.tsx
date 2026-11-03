@@ -24,6 +24,7 @@ describe("MeetingsPage", () => {
           id: "b1",
           eventTypeId: "intro-call",
           eventTypeTitle: "Знакомство",
+          topic: "",
           start: "2026-11-02T09:00:00+03:00",
           end: "2026-11-02T09:15:00+03:00",
         },
@@ -31,6 +32,7 @@ describe("MeetingsPage", () => {
           id: "b2",
           eventTypeId: "deep-dive",
           eventTypeTitle: "Разбор проекта",
+          topic: "Обсудить архитектуру",
           start: "2026-11-03T10:00:00+03:00",
           end: "2026-11-03T11:00:00+03:00",
         },
@@ -41,6 +43,27 @@ describe("MeetingsPage", () => {
 
     expect(await screen.findByText(/Знакомство — 2 ноября/)).toBeTruthy();
     expect(screen.getByText(/Разбор проекта — 3 ноября/)).toBeTruthy();
+    expect(screen.getByText(/Тема: «Обсудить архитектуру»/)).toBeTruthy();
+  });
+
+  it("does not render a topic line for meetings without a topic", async () => {
+    mockedMeetingsList.mockResolvedValue({
+      data: [
+        {
+          id: "b1",
+          eventTypeId: "intro-call",
+          eventTypeTitle: "Знакомство",
+          topic: "",
+          start: "2026-11-02T09:00:00+03:00",
+          end: "2026-11-02T09:15:00+03:00",
+        },
+      ],
+    } as never);
+
+    renderWithProviders(<MeetingsPage />);
+
+    expect(await screen.findByText(/Знакомство — 2 ноября/)).toBeTruthy();
+    expect(screen.queryByText(/Тема:/)).toBeNull();
   });
 
   it("shows an empty state when there are no meetings", async () => {
