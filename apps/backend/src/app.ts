@@ -105,7 +105,7 @@ export function createApp(deps: AppDeps) {
         400,
       );
     }
-    const topic = typeof rawTopic === "string" ? rawTopic : "";
+    const topic = typeof rawTopic === "string" ? rawTopic.trim() : "";
     const { eventTypeId, start } = raw as Record<string, unknown>;
     if (typeof eventTypeId !== "string" || eventTypeId === "") {
       return c.json({ code: "INVALID_REQUEST", message: "Укажите eventTypeId." }, 400);

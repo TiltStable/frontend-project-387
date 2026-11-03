@@ -121,6 +121,18 @@ describe("POST /api/bookings", () => {
     expect(body.code).toBe("TOPIC_TOO_LONG");
   });
 
+  it("treats a whitespace-only topic as no topic (regression)", async () => {
+    const res = await post(makeApp(), {
+      eventTypeId: "intro-call",
+      start: "2026-11-02T09:00:00+03:00",
+      topic: "   ",
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as Record<string, string>;
+    expect(body.topic).toBe("");
+  });
+
   it("rejects a conflicting slot even when a topic is present", async () => {
     const app = makeApp();
     await post(app, { eventTypeId: "intro-call", start: "2026-11-02T09:00:00+03:00" });
