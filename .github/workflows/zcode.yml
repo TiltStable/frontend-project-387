@@ -133,21 +133,26 @@ jobs:
             import fs from "node:fs";
             const read = (p) => { try { return fs.readFileSync(p, "utf8"); } catch { return ""; } };
             const answer = read("/tmp/agent/answer.txt").trim();
+            const ran = fs.existsSync("/tmp/agent/exit-code");
             const rc = read("/tmp/agent/exit-code").trim() || "1";
-            const limit = 60000; // символы, не байты: лимит комментария GitHub 65536
-            const trimmed = answer.length > limit
-              ? answer.slice(0, limit) + "\n\n…(ответ обрезан, полные логи — в прогоне Actions)"
+            const MAX_BYTES = 60000; // лимит комментария GitHub 65536 байт; кириллица — 2 байта/символ
+            const buf = Buffer.from(answer, "utf8");
+            const trimmed = buf.length > MAX_BYTES
+              ? buf.subarray(0, MAX_BYTES).toString("utf8")
+                + "\n\n…(ответ обрезан, полные логи — в прогоне Actions)"
               : answer;
-            const header = rc === "0"
-              ? "**Ответ агента:**"
-              : "**Агент завершился с ошибкой; ниже всё, что он успел вывести:**";
+            const header = !ran
+              ? "**Агент не запускался: сбой при подготовке прогона (подробности — в логах шага Build prompt):**"
+              : rc === "0"
+                ? "**Ответ агента:**"
+                : "**Агент завершился с ошибкой; ниже всё, что он успел вывести:**";
             const fallback = "(пустой вывод — детали в логах прогона)";
             const body = `${header}\n\n${trimmed || fallback}\n\n---\nПрогон: ${process.env.RUN_URL}`;
             fs.writeFileSync("/tmp/agent/comment.md", body);
           '
           if [ "$EVENT_NAME" = "pull_request_review_comment" ]; then
             gh api "repos/$GITHUB_REPOSITORY/pulls/comments/$COMMENT_ID/replies" \
-              -f body=@/tmp/agent/comment.md
+              -f body="$(cat /tmp/agent/comment.md)"
           else
             gh issue comment "$NUMBER" --body-file /tmp/agent/comment.md
           fi
