@@ -125,6 +125,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+          mkdir -p /tmp/agent
           {
             echo "Ты — агент учебного проекта «Календарь звонков» (репозиторий $GITHUB_REPOSITORY)."
             echo "Это РЕГУЛЯРНЫЙ АУДИТ работающего приложения по Lighthouse-отчёту."
@@ -180,6 +181,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+          mkdir -p /tmp/agent
           node --input-type=module -e '
             import fs from "node:fs";
             const read = (p) => { try { return fs.readFileSync(p, "utf8"); } catch { return ""; } };
