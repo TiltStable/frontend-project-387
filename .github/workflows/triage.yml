@@ -1,0 +1,141 @@
+# Автотриаж новых обращений: issue, открытый доверенным автором без метки
+# `ready-for-implementation`, разбирается агентом — что приложение уже
+# умеет по теме, уточняющие вопросы при нехватке данных, предлагаемый
+# следующий шаг. Код агент не меняет, тикеты не создаёт: это отдельный
+# согласованный шаг (см. README «Автотриаж»).
+#
+# Подготовленные к реализации тикеты (метка `ready-for-implementation`,
+# см. docs/agents/tracker.md «Метки») до агента не доходят: их отсекает
+# фильтр job'а, вызова модели не происходит.
+
+name: triage
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: triage-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+env:
+  CLAUDE_CODE_VERSION: "2.1.317"
+  ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
+
+jobs:
+  triage:
+    if: >-
+      (github.event.issue.author_association == 'OWNER' ||
+       github.event.issue.author_association == 'MEMBER' ||
+       github.event.issue.author_association == 'COLLABORATOR') &&
+      github.event.issue.user.type != 'Bot' &&
+      !contains(github.event.issue.labels.*.name, 'ready-for-implementation')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install agent CLI
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+      - name: Expose project rules to the agent
+        run: ln -s AGENTS.md CLAUDE.md
+
+      - name: Build triage prompt
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/agent
+          # Срез тела без пайпа: printf|head под pipefail ловит SIGPIPE на длинных issue.
+          ISSUE_BODY_CUT=$(node --input-type=module -e '
+            process.stdout.write((process.env.ISSUE_BODY ?? "").slice(0, 8000));
+          ')
+          {
+            echo "Ты — агент учебного проекта «Календарь звонков» (репозиторий $GITHUB_REPOSITORY)."
+            echo "Это АВТОТРИАЖ нового обращения к владельцу календаря. Правила проекта — AGENTS.md,"
+            echo "возможности приложения — README.md и docs/spec.md, конвенции трекера — docs/agents/tracker.md:"
+            echo "загляни в них, чтобы разбор опирался на фактическое состояние приложения."
+            echo
+            echo "Опубликуй комментарий к этому issue с разделами:"
+            echo "1. Что приложение уже умеет по теме обращения (по фактическому коду и документам)."
+            echo "2. Уточняющие вопросы — если данных для понимания потребности не хватает."
+            echo "3. Предлагаемый следующий шаг (обсуждение, to-spec, to-tickets — но пока НЕ выполняй их)."
+            echo "Правила: код не менять; тикеты и спецификации не создавать (это отдельный согласованный"
+            echo "шаг после ответов человека); если обращение — не потребность, а готовый подготовленный"
+            echo "тикет или служебная запись, напиши об одном абзаце и не задавай вопросов."
+            echo "Отвечай по-русски, в Markdown, кратко."
+            echo
+            echo "## Обращение #${{ github.event.issue.number }}: $ISSUE_TITLE"
+            echo "Автор: $ISSUE_AUTHOR"
+            echo
+            printf '%s\n' "$ISSUE_BODY_CUT"
+          } > /tmp/agent/prompt.md
+          wc -c /tmp/agent/prompt.md
+
+      - name: Run agent
+        env:
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.Z_AI_API_KEY }}
+          API_TIMEOUT_MS: "3000000"
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+        run: |
+          set -uo pipefail
+          rc=0
+          claude -p "$(cat /tmp/agent/prompt.md)" \
+            --output-format text \
+            > /tmp/agent/answer.txt 2> /tmp/agent/agent.err || rc=$?
+          echo "$rc" > /tmp/agent/exit-code
+          echo "agent exit code: $rc"
+          tail -5 /tmp/agent/agent.err || true
+          exit 0
+
+      - name: Post reply
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const read = (p) => { try { return fs.readFileSync(p, "utf8"); } catch { return ""; } };
+            const answer = read("/tmp/agent/answer.txt").trim();
+            const ran = fs.existsSync("/tmp/agent/exit-code");
+            const rc = read("/tmp/agent/exit-code").trim() || "1";
+            const MAX_BYTES = 60000; // лимит комментария GitHub 65536 байт; кириллица — 2 байта/символ
+            const buf = Buffer.from(answer, "utf8");
+            const trimmed = buf.length > MAX_BYTES
+              ? buf.subarray(0, MAX_BYTES).toString("utf8")
+                + "\n\n…(ответ обрезан, полные логи — в прогоне Actions)"
+              : answer;
+            const header = !ran
+              ? "**Автотриаж не запускался: сбой при подготовке прогона (подробности — в логах шага Build triage prompt):**"
+              : rc === "0"
+                ? "**Автотриаж:**"
+                : "**Автотриаж завершился с ошибкой; ниже всё, что он успел вывести:**";
+            const fallback = "(пустой вывод — детали в логах прогона)";
+            const body = `${header}\n\n${trimmed || fallback}\n\n---\nПрогон: ${process.env.RUN_URL}`;
+            fs.writeFileSync("/tmp/agent/comment.md", body);
+          '
+          gh issue comment "$NUMBER" --body-file /tmp/agent/comment.md
+
+      - name: Fail visibly on agent error
+        run: |
+          RC=$(cat /tmp/agent/exit-code)
+          test "$RC" = "0"
