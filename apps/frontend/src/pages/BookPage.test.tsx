@@ -215,4 +215,39 @@ describe("BookPage", () => {
       },
     });
   });
+
+  it("keeps the booking confirmation visible when slot refresh fails", async () => {
+    mockedEventTypesList.mockResolvedValue({ data: [introCall] } as never);
+    mockedAvailableSlotsApiList
+      .mockResolvedValueOnce({
+        data: {
+          eventTypeId: "intro-call",
+          durationMinutes: 15,
+          windowFrom: "2026-10-31",
+          windowTo: "2026-11-13",
+          slots: ["2026-11-02T09:00:00+03:00"],
+        },
+      } as never)
+      .mockResolvedValueOnce({ error: "Internal Server Error" } as never);
+    mockedBookingsCreate.mockResolvedValue({
+      data: {
+        id: "b1",
+        eventTypeId: "intro-call",
+        eventTypeTitle: "Знакомство",
+        topic: "Обсудить проект",
+        start: "2026-11-02T09:00:00+03:00",
+        end: "2026-11-02T09:15:00+03:00",
+      },
+    } as never);
+
+    renderWithProviders(<BookPage />);
+    fireEvent.click(await screen.findByText("Знакомство"));
+    fireEvent.change(await screen.findByPlaceholderText("Тема звонка (необязательно)"), {
+      target: { value: "Обсудить проект" },
+    });
+    fireEvent.click(screen.getByText("09:00"));
+
+    expect(await screen.findByText(/Тема: «Обсудить проект»/)).toBeTruthy();
+    expect(screen.getByText(/Не удалось обновить слоты/)).toBeTruthy();
+  });
 });
