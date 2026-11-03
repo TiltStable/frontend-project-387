@@ -1,0 +1,40 @@
+{
+  "name": "call-calendar",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "e2e"
+  ],
+  "type": "module",
+  "scripts": {
+    "dev:backend": "npm run dev -w backend",
+    "dev:frontend": "npm run dev -w frontend",
+    "contract:build": "tsp compile contracts",
+    "client:generate": "npm run client:generate -w frontend",
+    "gen": "npm run contract:build && npm run client:generate",
+    "gen:check": "npm run gen && git diff --exit-code -- contracts/tsp-output apps/frontend/src/api-client",
+    "build": "npm run build --workspaces --if-present",
+    "test": "vitest run",
+    "e2e": "npm run test -w e2e",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint --fix .",
+    "format:check": "oxfmt --check .",
+    "format": "oxfmt .",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "check": "npm run lint && npm run format:check && npm run typecheck && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@typespec/compiler": "^1.17.0",
+    "@typespec/http": "^1.17.0",
+    "@typespec/openapi3": "^1.17.0",
+    "oxfmt": "^0.75.0",
+    "oxlint": "^1.90.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}

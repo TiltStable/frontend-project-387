@@ -1,0 +1,19 @@
+[settings]
+experimental = true
+
+[tools]
+node = "24"
+hk = "2.10.0"
+pitchfork = "2.32.4"
+
+[daemons.backend]
+run = "exec npm run dev:backend"
+ready_port = 3000
+
+[daemons.frontend]
+run = "exec npm run dev:frontend"
+ready_port = 5173
+
+[tasks.check]
+description = "lint + format + typecheck + test + build + gen:check + e2e (real servers)"
+run = "npm run check && npm run gen:check && npm run e2e"
