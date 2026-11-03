@@ -160,6 +160,7 @@ components:
         - id
         - eventTypeId
         - eventTypeTitle
+        - topic
         - start
         - end
       properties:
@@ -169,6 +170,10 @@ components:
           type: string
         eventTypeTitle:
           type: string
+        topic:
+          type: string
+          maxLength: 200
+          description: Optional call topic provided by the guest; empty string when absent.
         start:
           type: string
           format: date-time
@@ -186,6 +191,10 @@ components:
         start:
           type: string
           format: date-time
+        topic:
+          type: string
+          maxLength: 200
+          description: Optional call topic; empty or missing means no topic.
     ConflictError:
       type: object
       required:
@@ -254,6 +263,7 @@ components:
         - id
         - eventTypeId
         - eventTypeTitle
+        - topic
         - start
         - end
       properties:
@@ -263,6 +273,10 @@ components:
           type: string
         eventTypeTitle:
           type: string
+        topic:
+          type: string
+          maxLength: 200
+          description: Same as the booking's topic; empty string when absent.
         start:
           type: string
           format: date-time

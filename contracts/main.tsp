@@ -88,6 +88,10 @@ model Booking {
 
   eventTypeTitle: string;
 
+  /** Optional call topic provided by the guest; empty string when absent. */
+  @maxLength(200)
+  topic: string;
+
   start: utcDateTime;
 
   end: utcDateTime;
@@ -97,6 +101,10 @@ model BookingCreate {
   eventTypeId: string;
 
   start: utcDateTime;
+
+  /** Optional call topic; empty or missing means no topic. */
+  @maxLength(200)
+  topic?: string;
 }
 
 model Meeting {
@@ -105,6 +113,10 @@ model Meeting {
   eventTypeId: string;
 
   eventTypeTitle: string;
+
+  /** Same as the booking's topic; empty string when absent. */
+  @maxLength(200)
+  topic: string;
 
   start: utcDateTime;
 

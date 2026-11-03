@@ -96,6 +96,16 @@ export function createApp(deps: AppDeps) {
     if (typeof raw !== "object" || raw === null) {
       return c.json({ code: "INVALID_REQUEST", message: "Ожидается JSON-объект." }, 400);
     }
+    // Тема проверяется первой: гигиена ввода до семантических проверок
+    // (тип события, сетка, конфликт). Отсутствует или пустая — темы нет.
+    const rawTopic = (raw as Record<string, unknown>).topic;
+    if (rawTopic !== undefined && (typeof rawTopic !== "string" || rawTopic.length > 200)) {
+      return c.json(
+        { code: "TOPIC_TOO_LONG", message: "topic должен быть строкой до 200 символов." },
+        400,
+      );
+    }
+    const topic = typeof rawTopic === "string" ? rawTopic : "";
     const { eventTypeId, start } = raw as Record<string, unknown>;
     if (typeof eventTypeId !== "string" || eventTypeId === "") {
       return c.json({ code: "INVALID_REQUEST", message: "Укажите eventTypeId." }, 400);
@@ -152,6 +162,7 @@ export function createApp(deps: AppDeps) {
     const created = bookings.create({
       id: randomUUID(),
       eventTypeId: eventType.id,
+      topic,
       startMs,
       endMs: candidate.endMs,
     });
@@ -161,6 +172,7 @@ export function createApp(deps: AppDeps) {
         id: created.id,
         eventTypeId: created.eventTypeId,
         eventTypeTitle: eventType.title,
+        topic: created.topic,
         start: formatOffsetDateTime(created.startMs),
         end: formatOffsetDateTime(created.endMs),
       },
@@ -178,6 +190,7 @@ export function createApp(deps: AppDeps) {
         id: booking.id,
         eventTypeId: booking.eventTypeId,
         eventTypeTitle: deps.eventTypes.get(booking.eventTypeId)?.title ?? booking.eventTypeId,
+        topic: booking.topic,
         start: formatOffsetDateTime(booking.startMs),
         end: formatOffsetDateTime(booking.endMs),
       }));
