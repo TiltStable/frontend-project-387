@@ -1,0 +1,156 @@
+# Независимое авторевью PR на событии pull_request. Агент читает изменения,
+# спецификацию и согласование по ссылкам из описания PR, результаты CI и
+# критерии из REVIEW.md, публикует замечания комментарием. Код не меняет и
+# сессию реализации не продолжает: правки запускает только человек командой
+# /zc (см. zcode.yml).
+#
+# Фильтры: только доверенные авторы, не боты (PR агента не ревьюит сам
+# себя), ветки своего репозитория — недоверенные fork секрет не получают,
+# pull_request_target не используется.
+
+name: pr-review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: write
+  actions: read
+  checks: read
+  statuses: read
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CLAUDE_CODE_VERSION: "2.1.317"
+  ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
+
+jobs:
+  review:
+    if: >-
+      (github.event.pull_request.author_association == 'OWNER' ||
+       github.event.pull_request.author_association == 'MEMBER' ||
+       github.event.pull_request.author_association == 'COLLABORATOR') &&
+      github.event.pull_request.user.type != 'Bot' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install agent CLI
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+      - name: Expose project rules to the agent
+        run: ln -s AGENTS.md CLAUDE.md
+
+      - name: Build review prompt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/agent
+          {
+            echo "Ты — независимый ревьюер учебного проекта «Календарь звонков»"
+            echo "(репозиторий $GITHUB_REPOSITORY). Это АВТОРЕВЬЮ PR: ты НЕ автор"
+            echo "изменений и не продолжаешь сессию реализации; код не меняешь."
+            echo
+            echo "Критерии проверки — файл REVIEW.md в корне рабочей копии: прочитай"
+            echo "его первым. Формат замечания: файл, строка, условия воспроизведения,"
+            echo "последствие. Если подтверждённых дефектов нет — сообщи об этом прямо."
+            echo
+            echo "Сверь изменение со спецификацией и согласованным объёмом: в описании"
+            echo "PR есть ссылки на issues — прочитай их через gh issue view, недоступные"
+            echo "или противоречащие ссылки отметь как пробел ревью. Проверь статус CI"
+            echo "этого PR (gh api checks/statuses) и учти красные проверки."
+            echo
+            echo "Не повторяй вывод линтера и не предлагай переформатирование."
+            echo "Отвечай по-русски, в Markdown."
+            echo
+            echo "## PR #$PR_NUMBER: $PR_TITLE"
+            echo "Head commit: $HEAD_SHA"
+            echo
+            echo "## Описание PR"
+            printf '%s\n' "$PR_BODY" | head -c 4000
+            echo
+            echo
+            echo "## Diff"
+            gh pr diff "$PR_NUMBER"
+            echo
+            echo "## Критерии REVIEW.md"
+            cat REVIEW.md
+          } > /tmp/agent/prompt.md
+          wc -c /tmp/agent/prompt.md
+
+      - name: Run agent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.Z_AI_API_KEY }}
+          API_TIMEOUT_MS: "3000000"
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+        run: |
+          set -uo pipefail
+          rc=0
+          claude -p "$(cat /tmp/agent/prompt.md)" \
+            --output-format text \
+            --allowedTools "Bash(gh api:*)" "Bash(gh issue view:*)" "Bash(gh pr view:*)" "Bash(gh pr checks:*)" "Bash(gh run view:*)" \
+            > /tmp/agent/answer.txt 2> /tmp/agent/agent.err || rc=$?
+          echo "$rc" > /tmp/agent/exit-code
+          echo "agent exit code: $rc"
+          tail -5 /tmp/agent/agent.err || true
+          exit 0
+
+      - name: Post review
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const read = (p) => { try { return fs.readFileSync(p, "utf8"); } catch { return ""; } };
+            const answer = read("/tmp/agent/answer.txt").trim();
+            const ran = fs.existsSync("/tmp/agent/exit-code");
+            const rc = read("/tmp/agent/exit-code").trim() || "1";
+            const MAX_BYTES = 60000;
+            const buf = Buffer.from(answer, "utf8");
+            const trimmed = buf.length > MAX_BYTES
+              ? buf.subarray(0, MAX_BYTES).toString("utf8")
+                + "\n\n…(ответ обрезан, полные логи — в прогоне Actions)"
+              : answer;
+            const header = !ran
+              ? "**Авторевью не запускалось: сбой при подготовке прогона (подробности — в логах шага Build review prompt):**"
+              : rc === "0"
+                ? "**Авторевью PR:**"
+                : "**Авторевью завершилось с ошибкой; ниже всё, что оно успело вывести:**";
+            const fallback = "(пустой вывод — детали в логах прогона)";
+            const body = `${header}\n\n${trimmed || fallback}\n\n---\nПрогон: ${process.env.RUN_URL}`;
+            fs.writeFileSync("/tmp/agent/comment.md", body);
+          '
+          gh pr comment "$PR_NUMBER" --body-file /tmp/agent/comment.md
+
+      - name: Fail visibly on agent error
+        run: |
+          RC=$(cat /tmp/agent/exit-code)
+          test "$RC" = "0"

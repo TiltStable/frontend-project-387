@@ -1,6 +1,9 @@
 name: check
 
-on: push
+on:
+  push:
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 jobs:
   check:
@@ -23,3 +26,40 @@ jobs:
           name: playwright-report
           path: e2e/playwright-report/
           retention-days: 7
+
+  # Проверка работающей версии PR: точный head SHA автора изменений,
+  # основной и соседний сценарии e2e, артефакт с трейсом и SHA.
+  # Вызова модели нет — секреты не нужны. Человек перед мержем сверяет
+  # preview-sha.txt из артефакта с текущим head PR.
+  preview:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Record checked-out SHA
+        run: |
+          git rev-parse HEAD
+          git rev-parse HEAD > preview-sha.txt
+
+      - uses: jdx/mise-action@v5
+
+      - run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run e2e scenarios with trace
+        run: npm run e2e -- --trace on
+
+      - uses: actions/upload-artifact@v5
+        if: ${{ always() }}
+        with:
+          name: pr-preview
+          path: |
+            preview-sha.txt
+            e2e/test-results/
+          retention-days: 14

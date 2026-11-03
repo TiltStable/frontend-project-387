@@ -40,11 +40,13 @@
 ## Агент в GitHub
 
 Комментарий `/zc <запрос>` (или `/zcode`) в issue, PR или к строке diff
-запускает агента на раннере GitHub Actions (`.github/workflows/zcode.yml`).
-Ответ приходит комментарием в то же обсуждение. Новые issues доверенных
-авторов без метки `ready-for-implementation` разбираются автотриажем
-(`.github/workflows/triage.yml`, инструкция в prompt воркфлоу). Модель —
-GLM через Anthropic-совместимый API Z.AI, ключ — в секрете
+запускает агента на раннере GitHub Actions (`.github/workflows/zcode.yml`,
+бюджет — 3 попытки на PR). Ответ приходит комментарием в то же обсуждение.
+Новые issues доверенных авторов без метки `ready-for-implementation`
+разбираются автотриажем (`.github/workflows/triage.yml`, инструкция в
+prompt воркфлоу). Каждый PR независимо ревьюится авторевью
+(`.github/workflows/pr-review.yml`) по критериям [REVIEW.md](REVIEW.md).
+Модель — GLM через Anthropic-совместимый API Z.AI, ключ — в секрете
 `Z_AI_API_KEY`. Правила проекта агент читает из этого файла и из
 `docs/agents/` в рабочей копии.
 

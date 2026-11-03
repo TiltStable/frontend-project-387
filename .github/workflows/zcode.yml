@@ -19,6 +19,7 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
+  actions: read
 
 concurrency:
   group: zcode-${{ github.event.issue.number || github.event.pull_request.number }}
@@ -57,6 +58,47 @@ jobs:
       # автоматически, AGENTS.md остаётся каноничным файлом в репозитории.
       - name: Expose project rules to the agent
         run: ln -s AGENTS.md CLAUDE.md
+
+      # Предел запусков на PR: проверяется ДО вызова модели. Попыткой
+      # считается каждый допущенный запрос человека (общий и построчный
+      # комментарии), включая повторные прогоны (run_attempt). Счётчик —
+      # история Actions (actions: read), которую токен агента не перепишет.
+      - name: Budget check
+        id: budget
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+          RUN_ID: ${{ github.run_id }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/agent
+          LIMIT=3
+          PRIOR=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?workflow=zcode.yml&per_page=100" \
+            --jq "[.workflow_runs[]
+                   | select(.id != ${RUN_ID}
+                       and (.event == \"issue_comment\" or .event == \"pull_request_review_comment\")
+                       and .conclusion != \"skipped\"
+                       and ([.pull_requests[].number] | index(${NUMBER})))]
+                  | map(.run_attempt)
+                  | add // 0")
+          echo "prior attempts on #$NUMBER: $PRIOR"
+          if [ "$PRIOR" -ge "$LIMIT" ]; then
+            SHA=$(gh pr view "$NUMBER" --json headRefOid -q .headRefOid 2>/dev/null || echo "unknown")
+            {
+              echo "**Предел запусков исчерпан (\`limit_exhausted\`). Нужен человек.**"
+              echo
+              echo "Бюджет: $LIMIT попыток на PR, использовано: $PRIOR. Команда выполнена без вызова модели."
+              echo
+              echo "Последний head SHA PR: \`$SHA\`"
+              echo "Логи прогона: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            } > /tmp/agent/answer.txt
+            echo "0" > /tmp/agent/exit-code
+            echo "exceeded=true" >> "$GITHUB_OUTPUT"
+            echo "Бюджет исчерпан — запуск агента пропущен."
+          else
+            echo "exceeded=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build prompt from issue and comment
         env:
@@ -102,6 +144,7 @@ jobs:
           wc -c /tmp/agent/prompt.md
 
       - name: Run agent
+        if: steps.budget.outputs.exceeded != 'true'
         env:
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.Z_AI_API_KEY }}
           API_TIMEOUT_MS: "3000000"
