@@ -11,7 +11,7 @@ name: audit
 
 on:
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "17 6 * * *"
       timezone: Europe/Moscow
   workflow_dispatch:
 
@@ -40,6 +40,14 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install agent CLI
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
       - name: Verify APP_URL is configured
         run: |
           if [ -z "$APP_URL" ]; then
@@ -51,10 +59,12 @@ jobs:
       # Free-инстанс Render спит после 15 минут; прогрев до измерений.
       - name: Warm up the app
         run: |
+          code=000
           for attempt in 1 2; do
             code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 150 "$APP_URL/health" || echo 000)
             echo "warm-up attempt $attempt: HTTP $code"
             if [ "$code" = "200" ]; then break; fi
+            sleep 20
           done
           if [ "$code" != "200" ]; then
             echo "::error::Приложение не ответило 200 на /health за два прогрева (последний: HTTP $code)."
