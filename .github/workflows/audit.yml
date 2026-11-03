@@ -109,7 +109,6 @@ jobs:
               if (audit.score !== null && audit.score < 0.9 && (audit.scoreDisplayValue ?? "") !== "") {
                 lines.push(`- ${audit.title} (${audit.scoreDisplayValue}): ${String(audit.description ?? "").slice(0, 160)}`);
               }
-              if (audit.score === null && audit.scoreDisplayMode === "informative") continue;
             }
             fs.writeFileSync("/tmp/audit/audit-summary.md", lines.join("\n"));
           '
